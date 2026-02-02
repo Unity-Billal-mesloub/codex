@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_protocol::ThreadId;
 use serde::Deserialize;
@@ -15,7 +18,9 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::OnceCell;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -37,6 +42,9 @@ pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
 const MERIYAH_UMD: &str = include_str!("meriyah.umd.min.js");
 const JS_REPL_MIN_NODE_VERSION: &str = include_str!("../../../../node-version.txt");
+const JS_REPL_POLL_MIN_MS: u64 = 50;
+const JS_REPL_POLL_MAX_MS: u64 = 5_000;
+const JS_REPL_POLL_DEFAULT_MS: u64 = 1_000;
 
 /// Per-task js_repl handle stored on the turn context.
 pub(crate) struct JsReplHandle {
@@ -76,11 +84,30 @@ pub struct JsReplArgs {
     pub code: String,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub poll: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct JsExecResult {
     pub output: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct JsExecSubmission {
+    pub exec_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct JsExecPollResult {
+    pub exec_id: String,
+    pub event_call_id: String,
+    pub logs: Vec<String>,
+    pub all_logs: Vec<String>,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub done: bool,
+    pub duration: Option<Duration>,
 }
 
 struct KernelState {
@@ -98,12 +125,40 @@ struct ExecContext {
     tracker: SharedTurnDiffTracker,
 }
 
+struct ExecBuffer {
+    event_call_id: String,
+    logs: VecDeque<String>,
+    all_logs: Vec<String>,
+    output: Option<String>,
+    error: Option<String>,
+    done: bool,
+    started_at: Instant,
+    notify: Arc<Notify>,
+}
+
+impl ExecBuffer {
+    fn new(event_call_id: String) -> Self {
+        Self {
+            event_call_id,
+            logs: VecDeque::new(),
+            all_logs: Vec::new(),
+            output: None,
+            error: None,
+            done: false,
+            started_at: Instant::now(),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+}
+
 pub struct JsReplManager {
     node_path: Option<PathBuf>,
     codex_home: PathBuf,
     tmp_dir: tempfile::TempDir,
     kernel: Mutex<Option<KernelState>>,
-    exec_lock: Arc<tokio::sync::Semaphore>,
+    exec_lock: Arc<Semaphore>,
+    exec_store: Arc<Mutex<HashMap<String, ExecBuffer>>>,
+    poll_kernels: Arc<Mutex<HashMap<String, KernelState>>>,
 }
 
 impl JsReplManager {
@@ -120,7 +175,9 @@ impl JsReplManager {
             codex_home,
             tmp_dir,
             kernel: Mutex::new(None),
-            exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
+            exec_lock: Arc::new(Semaphore::new(1)),
+            exec_store: Arc::new(Mutex::new(HashMap::new())),
+            poll_kernels: Arc::new(Mutex::new(HashMap::new())),
         });
 
         Ok(manager)
@@ -128,6 +185,8 @@ impl JsReplManager {
 
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
         self.reset_kernel().await;
+        self.reset_poll_kernels().await;
+        self.exec_store.lock().await.clear();
         Ok(())
     }
 
@@ -137,6 +196,23 @@ impl JsReplManager {
             guard.take()
         };
         if let Some(state) = state {
+            state.shutdown.cancel();
+        }
+    }
+
+    async fn reset_poll_kernel(&self, exec_id: &str) {
+        let state = self.poll_kernels.lock().await.remove(exec_id);
+        if let Some(state) = state {
+            state.shutdown.cancel();
+        }
+    }
+
+    async fn reset_poll_kernels(&self) {
+        let states = {
+            let mut guard = self.poll_kernels.lock().await;
+            guard.drain().map(|(_, state)| state).collect::<Vec<_>>()
+        };
+        for state in states {
             state.shutdown.cancel();
         }
     }
@@ -197,6 +273,7 @@ impl JsReplManager {
             id: req_id.clone(),
             code: args.code,
             timeout_ms: args.timeout_ms,
+            stream_logs: false,
         };
 
         Self::write_message(&stdin, &payload).await?;
@@ -226,6 +303,171 @@ impl JsReplManager {
         }
     }
 
+    pub async fn submit(
+        self: Arc<Self>,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        tracker: SharedTurnDiffTracker,
+        event_call_id: String,
+        args: JsReplArgs,
+    ) -> Result<JsExecSubmission, FunctionCallError> {
+        let state = self
+            .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
+        let exec_contexts = Arc::clone(&state.exec_contexts);
+        let stdin = Arc::clone(&state.stdin);
+        let shutdown = state.shutdown.clone();
+
+        let req_id = Uuid::new_v4().to_string();
+        exec_contexts.lock().await.insert(
+            req_id.clone(),
+            ExecContext {
+                session: Arc::clone(&session),
+                turn: Arc::clone(&turn),
+                tracker,
+            },
+        );
+        self.exec_store
+            .lock()
+            .await
+            .insert(req_id.clone(), ExecBuffer::new(event_call_id));
+
+        self.poll_kernels
+            .lock()
+            .await
+            .insert(req_id.clone(), state);
+
+        let payload = HostToKernel::Exec {
+            id: req_id.clone(),
+            code: args.code,
+            timeout_ms: args.timeout_ms,
+            stream_logs: true,
+        };
+        if let Err(err) = Self::write_message(&stdin, &payload).await {
+            self.exec_store.lock().await.remove(&req_id);
+            exec_contexts.lock().await.remove(&req_id);
+            self.poll_kernels.lock().await.remove(&req_id);
+            shutdown.cancel();
+            return Err(err);
+        }
+
+        let timeout_ms = args.timeout_ms.unwrap_or(30_000);
+        let manager = Arc::clone(&self);
+        let timeout_exec_id = req_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+            if manager.mark_timed_out(&timeout_exec_id).await {
+                manager.reset_poll_kernel(&timeout_exec_id).await;
+            }
+        });
+
+        Ok(JsExecSubmission { exec_id: req_id })
+    }
+
+    pub async fn poll(
+        &self,
+        exec_id: &str,
+        yield_time_ms: Option<u64>,
+    ) -> Result<JsExecPollResult, FunctionCallError> {
+        let deadline = Instant::now() + Duration::from_millis(clamp_poll_ms(yield_time_ms));
+
+        loop {
+            let (notify, event_call_id, done, logs, all_logs, output, error, duration) = {
+                let mut store = self.exec_store.lock().await;
+                let Some(entry) = store.get_mut(exec_id) else {
+                    return Err(FunctionCallError::RespondToModel(
+                        "js_repl exec id not found".to_string(),
+                    ));
+                };
+                if !entry.logs.is_empty() || entry.done {
+                    let drained_logs: Vec<String> = entry.logs.drain(..).collect();
+                    let event_call_id = entry.event_call_id.clone();
+                    let output = entry.output.take();
+                    let error = entry.error.take();
+                    let done = entry.done;
+                    let all_logs = if done {
+                        entry.all_logs.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    let duration = if done {
+                        Some(entry.started_at.elapsed())
+                    } else {
+                        None
+                    };
+                    if done {
+                        store.remove(exec_id);
+                    }
+                    return Ok(JsExecPollResult {
+                        exec_id: exec_id.to_string(),
+                        event_call_id,
+                        logs: drained_logs,
+                        all_logs,
+                        output,
+                        error,
+                        done,
+                        duration,
+                    });
+                }
+                (
+                    Arc::clone(&entry.notify),
+                    entry.event_call_id.clone(),
+                    entry.done,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
+            };
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(JsExecPollResult {
+                    exec_id: exec_id.to_string(),
+                    event_call_id,
+                    logs,
+                    all_logs,
+                    output,
+                    error,
+                    done,
+                    duration,
+                });
+            }
+
+            if tokio::time::timeout(remaining, notify.notified())
+                .await
+                .is_err()
+            {
+                return Ok(JsExecPollResult {
+                    exec_id: exec_id.to_string(),
+                    event_call_id,
+                    logs,
+                    all_logs,
+                    output,
+                    error,
+                    done,
+                    duration,
+                });
+            }
+        }
+    }
+
+    async fn mark_timed_out(&self, exec_id: &str) -> bool {
+        let mut store = self.exec_store.lock().await;
+        let Some(entry) = store.get_mut(exec_id) else {
+            return false;
+        };
+        if entry.done {
+            return false;
+        }
+        entry.done = true;
+        entry.error =
+            Some("js_repl execution timed out; kernel reset, rerun your request".to_string());
+        entry.notify.notify_waiters();
+        true
+    }
     async fn start_kernel(
         &self,
         turn: Arc<TurnContext>,
@@ -341,6 +583,8 @@ impl JsReplManager {
             stdout,
             Arc::clone(&pending_execs),
             Arc::clone(&exec_contexts),
+            Arc::clone(&self.exec_store),
+            Arc::clone(&self.poll_kernels),
             Arc::clone(&stdin_arc),
             shutdown.clone(),
         ));
@@ -389,6 +633,8 @@ impl JsReplManager {
         stdout: tokio::process::ChildStdout,
         pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
         exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
+        exec_store: Arc<Mutex<HashMap<String, ExecBuffer>>>,
+        poll_kernels: Arc<Mutex<HashMap<String, KernelState>>>,
         stdin: Arc<Mutex<ChildStdin>>,
         shutdown: CancellationToken,
     ) {
@@ -417,6 +663,14 @@ impl JsReplManager {
             };
 
             match msg {
+                KernelToHost::ExecLog { id, text } => {
+                    let mut store = exec_store.lock().await;
+                    if let Some(entry) = store.get_mut(&id) {
+                        entry.logs.push_back(text.clone());
+                        entry.all_logs.push(text);
+                        entry.notify.notify_waiters();
+                    }
+                }
                 KernelToHost::ExecResult {
                     id,
                     ok,
@@ -426,16 +680,30 @@ impl JsReplManager {
                     let mut pending = pending_execs.lock().await;
                     if let Some(tx) = pending.remove(&id) {
                         let payload = if ok {
-                            ExecResultMessage::Ok { output }
+                            ExecResultMessage::Ok {
+                                output: output.clone(),
+                            }
                         } else {
                             ExecResultMessage::Err {
                                 message: error
+                                    .clone()
                                     .unwrap_or_else(|| "js_repl execution failed".to_string()),
                             }
                         };
                         let _ = tx.send(payload);
                     }
+                    let mut store = exec_store.lock().await;
+                    if let Some(entry) = store.get_mut(&id) {
+                        entry.done = true;
+                        entry.output = Some(output);
+                        entry.error = error;
+                        entry.notify.notify_waiters();
+                    }
                     exec_contexts.lock().await.remove(&id);
+                    let state = poll_kernels.lock().await.remove(&id);
+                    if let Some(state) = state {
+                        state.shutdown.cancel();
+                    }
                 }
                 KernelToHost::RunTool(req) => {
                     let stdin_clone = Arc::clone(&stdin);
@@ -468,10 +736,43 @@ impl JsReplManager {
                 message: "js_repl kernel exited unexpectedly".to_string(),
             });
         }
+        drop(pending);
+        let exec_ids_from_contexts = {
+            let mut contexts = exec_contexts.lock().await;
+            let ids: Vec<String> = contexts.keys().cloned().collect();
+            contexts.clear();
+            ids
+        };
+        let mut affected_exec_ids: HashSet<String> = exec_ids_from_contexts.into_iter().collect();
+        {
+            let kernels = poll_kernels.lock().await;
+            affected_exec_ids.extend(
+                kernels
+                    .iter()
+                    .filter(|(_, state)| Arc::ptr_eq(&state.stdin, &stdin))
+                    .map(|(exec_id, _)| exec_id.clone()),
+            );
+        }
+        let mut store = exec_store.lock().await;
+        for exec_id in &affected_exec_ids {
+            if let Some(entry) = store.get_mut(exec_id) && !entry.done {
+                entry.done = true;
+                entry.error = Some("js_repl kernel exited unexpectedly".to_string());
+                entry.notify.notify_waiters();
+            }
+        }
+        drop(store);
+        let mut kernels = poll_kernels.lock().await;
+        for exec_id in affected_exec_ids {
+            kernels.remove(&exec_id);
+        }
     }
 
     async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
-        if matches!(req.tool_name.as_str(), "js_repl" | "js_repl_reset") {
+        if matches!(
+            req.tool_name.as_str(),
+            "js_repl" | "js_repl_poll" | "js_repl_reset"
+        ) {
             return RunToolResult {
                 id: req.id,
                 ok: false,
@@ -588,6 +889,10 @@ fn is_freeform_tool(specs: &[ToolSpec], name: &str) -> bool {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum KernelToHost {
+    ExecLog {
+        id: String,
+        text: String,
+    },
     ExecResult {
         id: String,
         ok: bool,
@@ -606,6 +911,8 @@ enum HostToKernel {
         code: String,
         #[serde(default)]
         timeout_ms: Option<u64>,
+        #[serde(default)]
+        stream_logs: bool,
     },
     RunToolResult(RunToolResult),
 }
@@ -632,6 +939,12 @@ struct RunToolResult {
 enum ExecResultMessage {
     Ok { output: String },
     Err { message: String },
+}
+
+fn clamp_poll_ms(value: Option<u64>) -> u64 {
+    value
+        .unwrap_or(JS_REPL_POLL_DEFAULT_MS)
+        .clamp(JS_REPL_POLL_MIN_MS, JS_REPL_POLL_MAX_MS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -812,6 +1125,7 @@ mod tests {
                 JsReplArgs {
                     code: "let x = await Promise.resolve(41); console.log(x);".to_string(),
                     timeout_ms: Some(10_000),
+                    poll: false,
                 },
             )
             .await?;
@@ -825,6 +1139,7 @@ mod tests {
                 JsReplArgs {
                     code: "console.log(x + 1);".to_string(),
                     timeout_ms: Some(10_000),
+                    poll: false,
                 },
             )
             .await?;
@@ -854,6 +1169,7 @@ mod tests {
                 JsReplArgs {
                     code: "while (true) {}".to_string(),
                     timeout_ms: Some(50),
+                    poll: false,
                 },
             ),
         )
@@ -891,6 +1207,7 @@ mod tests {
                 JsReplArgs {
                     code: "const shellOut = await codex.tool(\"shell_command\", { command: \"printf js_repl_shell_ok\" }); console.log(JSON.stringify(shellOut));".to_string(),
                     timeout_ms: Some(15_000),
+                    poll: false,
                 },
             )
             .await?;
@@ -904,6 +1221,7 @@ mod tests {
                 JsReplArgs {
                     code: "const toolOut = await codex.tool(\"list_mcp_resources\", {}); console.log(toolOut.type);".to_string(),
                     timeout_ms: Some(15_000),
+                    poll: false,
                 },
             )
             .await?;
@@ -1035,6 +1353,137 @@ console.log(out.output?.body?.text ?? "");
             err.to_string()
                 .contains("Importing module \"node:process\" is not allowed in js_repl")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_poll_submit_and_complete() -> anyhow::Result<()> {
+        if resolve_node(None).is_none() || std::env::var_os("CODEX_SANDBOX").is_some() {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.approval_policy = AskForApproval::Never;
+        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let submission = Arc::clone(&manager)
+            .submit(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                "call-1".to_string(),
+                JsReplArgs {
+                    code: "console.log('poll-ok');".to_string(),
+                    timeout_ms: Some(5_000),
+                    poll: true,
+                },
+            )
+            .await?;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let result = manager.poll(&submission.exec_id, Some(200)).await?;
+            if result.done {
+                let output = result.output.unwrap_or_default();
+                assert!(output.contains("poll-ok"));
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for js_repl poll completion");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_poll_submit_supports_parallel_execs() -> anyhow::Result<()> {
+        if resolve_node(None).is_none() || std::env::var_os("CODEX_SANDBOX").is_some() {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.approval_policy = AskForApproval::Never;
+        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let slow_submission = Arc::clone(&manager)
+            .submit(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                "call-slow".to_string(),
+                JsReplArgs {
+                    code: "await new Promise((resolve) => setTimeout(resolve, 2000)); console.log('slow-done');".to_string(),
+                    timeout_ms: Some(10_000),
+                    poll: true,
+                },
+            )
+            .await?;
+
+        let fast_submission = Arc::clone(&manager)
+            .submit(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                "call-fast".to_string(),
+                JsReplArgs {
+                    code: "console.log('fast-done');".to_string(),
+                    timeout_ms: Some(10_000),
+                    poll: true,
+                },
+            )
+            .await?;
+
+        let fast_start = Instant::now();
+        let fast_output = loop {
+            let result = manager.poll(&fast_submission.exec_id, Some(200)).await?;
+            if result.done {
+                break result.output.unwrap_or_default();
+            }
+            if fast_start.elapsed() > Duration::from_millis(1_500) {
+                panic!("fast polled exec did not complete quickly; submit appears serialized");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        assert!(fast_output.contains("fast-done"));
+
+        let slow_deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let result = manager.poll(&slow_submission.exec_id, Some(200)).await?;
+            if result.done {
+                let output = result.output.unwrap_or_default();
+                assert!(output.contains("slow-done"));
+                break;
+            }
+            if Instant::now() >= slow_deadline {
+                panic!("timed out waiting for slow polled exec completion");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_poll_rejects_unknown_exec_id() -> anyhow::Result<()> {
+        let (_session, turn) = make_session_and_context().await;
+        let manager = turn.js_repl.manager().await?;
+        let err = manager
+            .poll("missing-exec-id", Some(50))
+            .await
+            .expect_err("expected missing exec id error");
+        assert_eq!(err.to_string(), "js_repl exec id not found");
         Ok(())
     }
 }
