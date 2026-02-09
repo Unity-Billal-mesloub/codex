@@ -195,6 +195,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
+use crate::rollout::policy::EventPersistenceMode;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -282,6 +283,7 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
+        persist_full_history: bool,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -394,6 +396,7 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
+            persist_full_history,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -655,6 +658,7 @@ pub(crate) struct SessionConfiguration {
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
+    persist_full_history: bool,
 }
 
 impl SessionConfiguration {
@@ -904,12 +908,24 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
+                        if session_configuration.persist_full_history {
+                            EventPersistenceMode::FullHistory
+                        } else {
+                            EventPersistenceMode::Limited
+                        },
                     ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
                 resumed_history.conversation_id,
-                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+                RolloutRecorderParams::resume(
+                    resumed_history.rollout_path.clone(),
+                    if session_configuration.persist_full_history {
+                        EventPersistenceMode::FullHistory
+                    } else {
+                        EventPersistenceMode::Limited
+                    },
+                ),
             ),
         };
         let state_builder = match &initial_history {
@@ -5829,6 +5845,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_full_history: false,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -5919,6 +5936,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_full_history: false,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -6190,6 +6208,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_full_history: false,
         }
     }
 
@@ -6242,6 +6261,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_full_history: false,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -6379,6 +6399,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_full_history: false,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(

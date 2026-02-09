@@ -9,9 +9,11 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
+use crate::protocol::PatchApplyStatus;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
@@ -56,6 +58,7 @@ pub(crate) enum ToolEventStage {
 pub(crate) enum ToolEventFailure {
     Output(ExecToolCallOutput),
     Message(String),
+    Rejected(String),
 }
 
 pub(crate) async fn emit_exec_command_begin(
@@ -195,6 +198,11 @@ impl ToolEmitter {
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
+                    if output.exit_code == 0 {
+                        PatchApplyStatus::Completed
+                    } else {
+                        PatchApplyStatus::Failed
+                    },
                 )
                 .await;
             }
@@ -208,6 +216,11 @@ impl ToolEmitter {
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
+                    if output.exit_code == 0 {
+                        PatchApplyStatus::Completed
+                    } else {
+                        PatchApplyStatus::Failed
+                    },
                 )
                 .await;
             }
@@ -221,6 +234,21 @@ impl ToolEmitter {
                     String::new(),
                     (*message).to_string(),
                     false,
+                    PatchApplyStatus::Failed,
+                )
+                .await;
+            }
+            (
+                Self::ApplyPatch { changes, .. },
+                ToolEventStage::Failure(ToolEventFailure::Rejected(message)),
+            ) => {
+                emit_patch_end(
+                    ctx,
+                    changes.clone(),
+                    String::new(),
+                    (*message).to_string(),
+                    false,
+                    PatchApplyStatus::Declined,
                 )
                 .await;
             }
@@ -311,7 +339,7 @@ impl ToolEmitter {
                 } else {
                     msg
                 };
-                let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                let event = ToolEventStage::Failure(ToolEventFailure::Rejected(normalized.clone()));
                 let result = Err(FunctionCallError::RespondToModel(normalized));
                 (event, result)
             }
@@ -357,6 +385,7 @@ struct ExecCommandResult {
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
+    status: ExecCommandStatus,
 }
 
 async fn emit_exec_stage(
@@ -386,6 +415,11 @@ async fn emit_exec_stage(
                 exit_code: output.exit_code,
                 duration: output.duration,
                 formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
+                status: if output.exit_code == 0 {
+                    ExecCommandStatus::Completed
+                } else {
+                    ExecCommandStatus::Failed
+                },
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -398,6 +432,20 @@ async fn emit_exec_stage(
                 exit_code: -1,
                 duration: Duration::ZERO,
                 formatted_output: text,
+                status: ExecCommandStatus::Failed,
+            };
+            emit_exec_end(ctx, exec_input, exec_result).await;
+        }
+        ToolEventStage::Failure(ToolEventFailure::Rejected(message)) => {
+            let text = message.to_string();
+            let exec_result = ExecCommandResult {
+                stdout: String::new(),
+                stderr: text.clone(),
+                aggregated_output: text.clone(),
+                exit_code: -1,
+                duration: Duration::ZERO,
+                formatted_output: text,
+                status: ExecCommandStatus::Declined,
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -427,6 +475,7 @@ async fn emit_exec_end(
                 exit_code: exec_result.exit_code,
                 duration: exec_result.duration,
                 formatted_output: exec_result.formatted_output,
+                status: exec_result.status,
             }),
         )
         .await;
@@ -438,6 +487,7 @@ async fn emit_patch_end(
     stdout: String,
     stderr: String,
     success: bool,
+    status: PatchApplyStatus,
 ) {
     ctx.session
         .send_event(
@@ -449,6 +499,7 @@ async fn emit_patch_end(
                 stderr,
                 success,
                 changes,
+                status,
             }),
         )
         .await;
