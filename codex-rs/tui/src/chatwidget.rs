@@ -1762,7 +1762,7 @@ impl ChatWidget {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
-            remote_image_urls: self.bottom_pane.pending_non_editable_image_urls(),
+            remote_image_urls: self.bottom_pane.pending_remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
@@ -1827,7 +1827,7 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
-        self.set_pending_non_editable_image_urls(remote_image_urls);
+        self.set_pending_remote_image_urls(remote_image_urls);
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -3151,7 +3151,7 @@ impl ChatWidget {
                     let local_images = self
                         .bottom_pane
                         .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_pending_non_editable_image_urls();
+                    let remote_image_urls = self.take_pending_remote_image_urls();
                     let user_message = UserMessage {
                         text,
                         local_images,
@@ -3179,7 +3179,7 @@ impl ChatWidget {
                     let local_images = self
                         .bottom_pane
                         .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_pending_non_editable_image_urls();
+                    let remote_image_urls = self.take_pending_remote_image_urls();
                     let user_message = UserMessage {
                         text,
                         local_images,
@@ -3200,10 +3200,7 @@ impl ChatWidget {
                 InputResult::None => {
                     if key_event.kind == KeyEventKind::Press
                         && key_event.code == KeyCode::Enter
-                        && !self
-                            .bottom_pane
-                            .pending_non_editable_image_urls()
-                            .is_empty()
+                        && !self.bottom_pane.pending_remote_image_urls().is_empty()
                         && self
                             .bottom_pane
                             .composer_text_with_pending()
@@ -3213,7 +3210,7 @@ impl ChatWidget {
                         let user_message = UserMessage {
                             text: String::new(),
                             local_images: Vec::new(),
-                            remote_image_urls: self.take_pending_non_editable_image_urls(),
+                            remote_image_urls: self.take_pending_remote_image_urls(),
                             text_elements: Vec::new(),
                             mention_bindings: Vec::new(),
                         };
@@ -3585,7 +3582,7 @@ impl ChatWidget {
                 let local_images = self
                     .bottom_pane
                     .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_pending_non_editable_image_urls();
+                let remote_image_urls = self.take_pending_remote_image_urls();
                 let user_message = UserMessage {
                     text: prepared_args,
                     local_images,
@@ -3956,7 +3953,7 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
-        self.set_pending_non_editable_image_urls(remote_image_urls);
+        self.set_pending_remote_image_urls(remote_image_urls);
         self.add_to_history(history_cell::new_warning_event(
             self.image_inputs_not_supported_message(),
         ));
@@ -6810,18 +6807,18 @@ impl ChatWidget {
             .set_composer_text(text, text_elements, local_image_paths);
     }
 
-    pub(crate) fn set_pending_non_editable_image_urls(&mut self, remote_image_urls: Vec<String>) {
+    pub(crate) fn set_pending_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
         self.bottom_pane
-            .set_pending_non_editable_image_urls(remote_image_urls);
+            .set_pending_remote_image_urls(remote_image_urls);
     }
 
-    fn take_pending_non_editable_image_urls(&mut self) -> Vec<String> {
-        self.bottom_pane.take_pending_non_editable_image_urls()
+    fn take_pending_remote_image_urls(&mut self) -> Vec<String> {
+        self.bottom_pane.take_pending_remote_image_urls()
     }
 
     #[cfg(test)]
-    pub(crate) fn pending_non_editable_image_urls(&self) -> Vec<String> {
-        self.bottom_pane.pending_non_editable_image_urls()
+    pub(crate) fn pending_remote_image_urls(&self) -> Vec<String> {
+        self.bottom_pane.pending_remote_image_urls()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
