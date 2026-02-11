@@ -111,7 +111,15 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -217,7 +225,15 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -322,7 +338,15 @@ async fn responses_respects_model_info_overrides_from_config() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {

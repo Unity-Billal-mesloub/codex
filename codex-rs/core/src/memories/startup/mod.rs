@@ -120,10 +120,8 @@ pub(super) async fn run_memories_startup_pipeline(
             TurnMetadataPoll::Ready(header) => header,
             TurnMetadataPoll::Pending => None,
         };
-        let stage_one_context = StageOneRequestContext::from_turn_context(
-            turn_context.as_ref(),
-            turn_metadata_header,
-        );
+        let stage_one_context =
+            StageOneRequestContext::from_turn_context(turn_context.as_ref(), turn_metadata_header);
 
         succeeded_count = futures::stream::iter(claimed_candidates.into_iter())
             .map(|claim| {

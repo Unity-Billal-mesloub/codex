@@ -107,8 +107,9 @@ pub(crate) enum TurnMetadataPoll {
     Ready(Option<String>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum TurnMetadataHeaderJobState {
+    #[default]
     NotStarted,
     Pending {
         receiver: oneshot::Receiver<Option<String>>,
@@ -120,12 +121,6 @@ enum TurnMetadataHeaderJobState {
 #[derive(Debug, Default)]
 pub(crate) struct TurnMetadataHeaderJob {
     state: Mutex<TurnMetadataHeaderJobState>,
-}
-
-impl Default for TurnMetadataHeaderJobState {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 impl TurnMetadataHeaderJob {

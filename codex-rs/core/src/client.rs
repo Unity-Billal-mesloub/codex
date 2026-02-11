@@ -397,11 +397,8 @@ impl ModelClient {
         turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(
-            turn_state.as_ref(),
-            turn_id_header,
-            turn_metadata_header,
-        );
+        let headers =
+            self.build_websocket_headers(turn_state.as_ref(), turn_id_header, turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
             .connect(

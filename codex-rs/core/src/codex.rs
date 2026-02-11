@@ -37,10 +37,10 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
-use crate::turn_metadata::build_turn_metadata_header;
-use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::turn_metadata::TurnMetadataHeaderJob;
 use crate::turn_metadata::TurnMetadataPoll;
+use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -662,7 +662,7 @@ impl TurnContext {
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level).to_string();
         self.turn_metadata_job
-            .spawn(self.cwd.clone(), Some(sandbox.clone()));
+            .spawn(self.cwd.clone(), Some(sandbox));
     }
 
     pub(crate) fn cancel_turn_metadata_header_task(&self) {
@@ -3945,7 +3945,6 @@ impl Drop for TurnMetadataJobCancellation<'_> {
     }
 }
 
-///
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
