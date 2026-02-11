@@ -137,7 +137,7 @@ fn sanitize_rollout_item_for_persistence(
     item: RolloutItem,
     mode: EventPersistenceMode,
 ) -> RolloutItem {
-    if mode != EventPersistenceMode::FullHistory {
+    if mode != EventPersistenceMode::Extended {
         return item;
     }
 

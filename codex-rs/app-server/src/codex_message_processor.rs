@@ -1884,7 +1884,7 @@ impl CodexMessageProcessor {
             experimental_raw_events,
             personality,
             ephemeral,
-            persist_full_history,
+            persist_extended_history,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -1946,7 +1946,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .start_thread_with_tools(config, core_dynamic_tools, persist_full_history)
+            .start_thread_with_tools(config, core_dynamic_tools, persist_extended_history)
             .await
         {
             Ok(new_conv) => {
@@ -2671,7 +2671,7 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
-            persist_full_history,
+            persist_extended_history,
         } = params;
 
         let thread_history = if let Some(history) = history {
@@ -2791,7 +2791,7 @@ impl CodexMessageProcessor {
                 config,
                 thread_history,
                 self.auth_manager.clone(),
-                persist_full_history,
+                persist_extended_history,
             )
             .await
         {
@@ -2892,7 +2892,7 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
-            persist_full_history,
+            persist_extended_history,
         } = params;
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
@@ -2999,7 +2999,7 @@ impl CodexMessageProcessor {
                 usize::MAX,
                 config,
                 rollout_path.clone(),
-                persist_full_history,
+                persist_extended_history,
             )
             .await
         {

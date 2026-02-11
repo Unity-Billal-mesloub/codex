@@ -25,4 +25,4 @@ model?: string | null, modelProvider?: string | null, cwd?: string | null, appro
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on subsequent resume/fork/read.
  */
-persistFullHistory: boolean};
+persistExtendedHistory: boolean};

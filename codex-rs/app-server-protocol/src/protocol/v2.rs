@@ -1366,7 +1366,7 @@ pub struct ThreadStartParams {
     /// reconstruct a richer thread history on resume/fork/read.
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
-    pub persist_full_history: bool,
+    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -1452,7 +1452,7 @@ pub struct ThreadResumeParams {
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/resume.persistFullHistory")]
     #[serde(default)]
-    pub persist_full_history: bool,
+    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1510,7 +1510,7 @@ pub struct ThreadForkParams {
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/fork.persistFullHistory")]
     #[serde(default)]
-    pub persist_full_history: bool,
+    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

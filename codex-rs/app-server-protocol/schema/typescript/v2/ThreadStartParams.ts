@@ -14,4 +14,4 @@ experimentalRawEvents: boolean, /**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on resume/fork/read.
  */
-persistFullHistory: boolean};
+persistExtendedHistory: boolean};

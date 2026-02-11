@@ -6,7 +6,7 @@ use codex_protocol::models::ResponseItem;
 pub enum EventPersistenceMode {
     #[default]
     Limited,
-    FullHistory,
+    Extended,
 }
 
 /// Whether a rollout `item` should be persisted in rollout files for the
@@ -47,7 +47,7 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
 pub(crate) fn should_persist_event_msg(ev: &EventMsg, mode: EventPersistenceMode) -> bool {
     match mode {
         EventPersistenceMode::Limited => should_persist_event_msg_limited(ev),
-        EventPersistenceMode::FullHistory => should_persist_event_msg_full_history(ev),
+        EventPersistenceMode::Extended => should_persist_event_msg_extended(ev),
     }
 }
 
@@ -58,10 +58,10 @@ fn should_persist_event_msg_limited(ev: &EventMsg) -> bool {
     )
 }
 
-fn should_persist_event_msg_full_history(ev: &EventMsg) -> bool {
+fn should_persist_event_msg_extended(ev: &EventMsg) -> bool {
     matches!(
         event_msg_persistence_mode(ev),
-        Some(EventPersistenceMode::Limited) | Some(EventPersistenceMode::FullHistory)
+        Some(EventPersistenceMode::Limited) | Some(EventPersistenceMode::Extended)
     )
 }
 
@@ -102,7 +102,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseEnd(_)
-        | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::FullHistory),
+        | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::Extended),
         EventMsg::Warning(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoningDelta(_)
