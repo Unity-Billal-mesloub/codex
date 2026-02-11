@@ -84,6 +84,7 @@ pub(super) async fn extract_stage_one_output(
             &stage_one_context.otel_manager,
             stage_one_context.reasoning_effort,
             stage_one_context.reasoning_summary,
+            Some(stage_one_context.turn_id.as_str()),
             stage_one_context.turn_metadata_header.as_deref(),
         )
         .await

@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
+use crate::turn_metadata::TurnMetadataPoll;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
@@ -22,6 +23,7 @@ pub(super) const PHASE_ONE_THREAD_SCAN_LIMIT: usize = 5_000;
 
 #[derive(Clone)]
 struct StageOneRequestContext {
+    turn_id: String,
     model_info: ModelInfo,
     otel_manager: OtelManager,
     reasoning_effort: Option<ReasoningEffortConfig>,
@@ -32,6 +34,7 @@ struct StageOneRequestContext {
 impl StageOneRequestContext {
     fn from_turn_context(turn_context: &TurnContext, turn_metadata_header: Option<String>) -> Self {
         Self {
+            turn_id: turn_context.sub_id.clone(),
             model_info: turn_context.model_info.clone(),
             otel_manager: turn_context.otel_manager.clone(),
             reasoning_effort: turn_context.reasoning_effort,
@@ -113,9 +116,13 @@ pub(super) async fn run_memories_startup_pipeline(
     let mut succeeded_count = 0;
     if claimed_count > 0 {
         let turn_context = session.new_default_turn().await;
+        let turn_metadata_header = match turn_context.poll_turn_metadata_header() {
+            TurnMetadataPoll::Ready(header) => header,
+            TurnMetadataPoll::Pending => None,
+        };
         let stage_one_context = StageOneRequestContext::from_turn_context(
             turn_context.as_ref(),
-            turn_context.resolve_turn_metadata_header().await,
+            turn_metadata_header,
         );
 
         succeeded_count = futures::stream::iter(claimed_candidates.into_iter())
