@@ -3176,6 +3176,7 @@ impl ChatWidget {
                 InputResult::None => {
                     if key_event.kind == KeyEventKind::Press
                         && key_event.code == KeyCode::Enter
+                        && self.bottom_pane.composer_can_submit_enter()
                         && !self.bottom_pane.remote_image_urls().is_empty()
                         && self
                             .bottom_pane
