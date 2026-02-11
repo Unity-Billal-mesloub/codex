@@ -556,7 +556,12 @@ impl ThreadHistoryBuilder {
         if let Some(current_turn) = self.current_turn.as_mut()
             && current_turn.id == payload.turn_id
         {
-            current_turn.status = TurnStatus::Completed;
+            if matches!(
+                current_turn.status,
+                TurnStatus::Completed | TurnStatus::InProgress
+            ) {
+                current_turn.status = TurnStatus::Completed;
+            }
             self.finish_current_turn();
             return;
         }
@@ -566,12 +571,19 @@ impl ThreadHistoryBuilder {
             .iter_mut()
             .find(|turn| turn.id == payload.turn_id)
         {
-            turn.status = TurnStatus::Completed;
+            if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                turn.status = TurnStatus::Completed;
+            }
             return;
         }
 
         if let Some(current_turn) = self.current_turn.as_mut() {
-            current_turn.status = TurnStatus::Completed;
+            if matches!(
+                current_turn.status,
+                TurnStatus::Completed | TurnStatus::InProgress
+            ) {
+                current_turn.status = TurnStatus::Completed;
+            }
             self.finish_current_turn();
         }
     }
@@ -1674,6 +1686,54 @@ mod tests {
                     }],
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn error_then_turn_complete_preserves_failed_status() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hello".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::Error(ErrorEvent {
+                message: "stream failure".into(),
+                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                    http_status_code: Some(502),
+                }),
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-a".into(),
+                last_agent_message: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, "turn-a");
+        assert_eq!(turns[0].status, TurnStatus::Failed);
+        assert_eq!(
+            turns[0].error,
+            Some(TurnError {
+                message: "stream failure".into(),
+                codex_error_info: Some(
+                    crate::protocol::v2::CodexErrorInfo::ResponseStreamDisconnected {
+                        http_status_code: Some(502),
+                    }
+                ),
+                additional_details: None,
+            })
         );
     }
 }
