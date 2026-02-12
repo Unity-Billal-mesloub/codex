@@ -634,7 +634,7 @@ impl TurnContext {
             truncation_policy,
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
-            turn_metadata_header: self.turn_metadata_header.clone(),
+            turn_metadata_job: self.turn_metadata_job.clone(),
         }
     }
 
