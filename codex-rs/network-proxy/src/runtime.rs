@@ -73,6 +73,12 @@ pub struct BlockedRequest {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
     pub timestamp: i64,
 }
 
@@ -83,6 +89,9 @@ pub struct BlockedRequestArgs {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
+    pub decision: Option<String>,
+    pub source: Option<String>,
+    pub port: Option<u16>,
 }
 
 impl BlockedRequest {
@@ -94,6 +103,9 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
+            decision,
+            source,
+            port,
         } = args;
         Self {
             host,
@@ -102,6 +114,9 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
+            decision,
+            source,
+            port,
             timestamp: unix_timestamp(),
         }
     }
@@ -114,6 +129,7 @@ pub struct ConfigState {
     pub deny_set: GlobSet,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
+    pub blocked_total: u64,
 }
 
 #[async_trait]
@@ -314,10 +330,27 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let mut guard = self.state.write().await;
         guard.blocked.push_back(entry);
+        guard.blocked_total = guard.blocked_total.saturating_add(1);
         while guard.blocked.len() > MAX_BLOCKED_EVENTS {
             guard.blocked.pop_front();
         }
         Ok(())
+    }
+
+    pub async fn blocked_cursor(&self) -> Result<u64> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.blocked_total)
+    }
+
+    pub async fn blocked_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        let blocked_len_u64 = guard.blocked.len() as u64;
+        let oldest_retained_cursor = guard.blocked_total.saturating_sub(blocked_len_u64);
+        let effective_cursor = cursor.max(oldest_retained_cursor);
+        let skip = effective_cursor.saturating_sub(oldest_retained_cursor) as usize;
+        Ok(guard.blocked.iter().skip(skip).cloned().collect())
     }
 
     /// Drain and return the buffered blocked-request entries in FIFO order.
@@ -416,12 +449,17 @@ impl NetworkProxyState {
         match self.reloader.maybe_reload().await? {
             None => Ok(()),
             Some(mut new_state) => {
-                let (previous_cfg, blocked) = {
+                let (previous_cfg, blocked, blocked_total) = {
                     let guard = self.state.read().await;
-                    (guard.config.clone(), guard.blocked.clone())
+                    (
+                        guard.config.clone(),
+                        guard.blocked.clone(),
+                        guard.blocked_total,
+                    )
                 };
                 log_policy_changes(&previous_cfg, &new_state.config);
                 new_state.blocked = blocked;
+                new_state.blocked_total = blocked_total;
                 {
                     let mut guard = self.state.write().await;
                     *guard = new_state;
@@ -648,6 +686,71 @@ mod tests {
         );
 
         state.revoke_temporary_allowed_host(&granted_host).await;
+    }
+
+    #[tokio::test]
+    async fn blocked_since_returns_only_new_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should succeed");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].host, "google.com");
+        assert_eq!(blocked[0].decision.as_deref(), Some("ask"));
+    }
+
+    #[tokio::test]
+    async fn blocked_since_handles_evicted_old_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        for idx in 0..(MAX_BLOCKED_EVENTS + 5) {
+            state
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: format!("example{idx}.com"),
+                    reason: "not_allowed".to_string(),
+                    client: None,
+                    method: Some("GET".to_string()),
+                    mode: None,
+                    protocol: "http".to_string(),
+                    decision: Some("ask".to_string()),
+                    source: Some("decider".to_string()),
+                    port: Some(80),
+                }))
+                .await
+                .expect("entry should be recorded");
+        }
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should succeed");
+        assert_eq!(blocked.len(), MAX_BLOCKED_EVENTS);
+        assert_eq!(blocked[0].host, "example5.com");
     }
 
     #[tokio::test]

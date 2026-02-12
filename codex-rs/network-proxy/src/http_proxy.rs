@@ -210,6 +210,9 @@ async fn http_connect_accept(
                     method: Some("CONNECT".to_string()),
                     mode: None,
                     protocol: "http-connect".to_string(),
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(authority.port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -248,6 +251,9 @@ async fn http_connect_accept(
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http-connect".to_string(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(authority.port),
             }))
             .await;
         let client = client.as_deref().unwrap_or_default();
@@ -516,6 +522,9 @@ async fn http_plain_proxy(
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
                     protocol: "http".to_string(),
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -546,6 +555,9 @@ async fn http_plain_proxy(
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http".to_string(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(port),
             }))
             .await;
         let client = client.as_deref().unwrap_or_default();
@@ -622,18 +634,26 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
 }
 
 fn json_blocked(host: &str, reason: &str, details: Option<&PolicyDecisionDetails<'_>>) -> Response {
-    let (policy_decision_prefix, message) = details
+    let (policy_decision_prefix, message, decision, source, protocol, port) = details
         .map(|details| {
             (
                 Some(policy_decision_prefix(details)),
                 Some(blocked_message_with_policy(reason, details)),
+                Some(details.decision.as_str()),
+                Some(details.source.as_str()),
+                Some(details.protocol.as_policy_protocol()),
+                Some(details.port),
             )
         })
-        .unwrap_or((None, None));
+        .unwrap_or((None, None, None, None, None, None));
     let response = BlockedResponse {
         status: "blocked",
         host,
         reason,
+        decision,
+        source,
+        protocol,
+        port,
         policy_decision_prefix,
         message,
     };
@@ -667,6 +687,9 @@ async fn proxy_disabled_response(
             method,
             mode: None,
             protocol: protocol.as_policy_protocol().to_string(),
+            decision: Some("deny".to_string()),
+            source: Some("proxy_state".to_string()),
+            port: Some(port),
         }))
         .await;
 
@@ -702,6 +725,14 @@ struct BlockedResponse<'a> {
     status: &'static str,
     host: &'a str,
     reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_decision_prefix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
