@@ -17,5 +17,6 @@ pub use manager::SkillsManager;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;
+pub use model::SkillPermissions;
 pub use model::SkillPolicy;
 pub use render::render_skills_section;

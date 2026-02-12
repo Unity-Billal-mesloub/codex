@@ -11,6 +11,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
+    pub permissions: Option<SkillPermissions>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
@@ -52,6 +53,20 @@ pub struct SkillToolDependency {
     pub transport: Option<String>,
     pub command: Option<String>,
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkillPermissions {
+    pub network: Option<bool>,
+    pub network_allowed_domains: Option<Vec<String>>,
+    pub network_denied_domains: Option<Vec<String>>,
+    pub fs_read: Option<Vec<PathBuf>>,
+    pub fs_write: Option<Vec<PathBuf>>,
+    pub macos_launch_services: Option<bool>,
+    pub macos_preferences: Option<bool>,
+    pub macos_automation: Option<Vec<String>>,
+    pub macos_accessibility: Option<bool>,
+    pub macos_calendar: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
