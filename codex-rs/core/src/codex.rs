@@ -202,8 +202,11 @@ use crate::skills::SkillError;
 use crate::skills::SkillInjections;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
+use crate::skills::SkillPermissionContext;
+use crate::skills::SkillPermissionRegistry;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::build_skill_permission_registry;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
@@ -1112,6 +1115,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skill_permission_registries: std::sync::RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,
@@ -1928,6 +1932,38 @@ impl Session {
             Arc::clone(&task.turn_context),
             task.cancellation_token.child_token(),
         ))
+    }
+
+    fn set_turn_skill_permission_registry(
+        &self,
+        turn_id: &str,
+        registry: Arc<SkillPermissionRegistry>,
+    ) {
+        if let Ok(mut registries) = self.services.skill_permission_registries.write() {
+            registries.insert(turn_id.to_string(), registry);
+        }
+    }
+
+    fn clear_turn_skill_permission_registry(&self, turn_id: &str) {
+        if let Ok(mut registries) = self.services.skill_permission_registries.write() {
+            registries.remove(turn_id);
+        }
+    }
+
+    pub(crate) fn skill_permission_context_for_command(
+        &self,
+        turn: &TurnContext,
+        command: &[String],
+        cwd: &Path,
+    ) -> Option<SkillPermissionContext> {
+        let registry = self
+            .services
+            .skill_permission_registries
+            .read()
+            .ok()?
+            .get(&turn.sub_id)
+            .cloned()?;
+        registry.match_command(command, cwd, &turn.sandbox_policy)
     }
 
     pub(crate) async fn record_execpolicy_amendment_message(
@@ -3865,6 +3901,25 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
+struct TurnSkillPermissionRegistryGuard {
+    session: Arc<Session>,
+    turn_id: String,
+}
+
+impl TurnSkillPermissionRegistryGuard {
+    fn new(session: Arc<Session>, turn_id: String, registry: Arc<SkillPermissionRegistry>) -> Self {
+        session.set_turn_skill_permission_registry(&turn_id, registry);
+        Self { session, turn_id }
+    }
+}
+
+impl Drop for TurnSkillPermissionRegistryGuard {
+    fn drop(&mut self) {
+        self.session
+            .clear_turn_skill_permission_registry(&self.turn_id);
+    }
+}
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -3939,6 +3994,12 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
+    let skill_permission_registry = Arc::new(build_skill_permission_registry(&mentioned_skills));
+    let _skill_permission_registry_guard = TurnSkillPermissionRegistryGuard::new(
+        Arc::clone(&sess),
+        turn_context.sub_id.clone(),
+        skill_permission_registry,
+    );
     let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let config = turn_context.config.clone();
     if config
@@ -6373,6 +6434,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skill_permission_registries: std::sync::RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,
@@ -6518,6 +6580,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skill_permission_registries: std::sync::RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,

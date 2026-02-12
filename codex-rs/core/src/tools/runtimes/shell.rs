@@ -26,6 +26,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
 
@@ -39,6 +40,8 @@ pub struct ShellRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub sandbox_policy_override: Option<SandboxPolicy>,
+    pub skill_permission_profile_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -49,6 +52,7 @@ pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: PathBuf,
     sandbox_permissions: SandboxPermissions,
+    skill_permission_profile_id: Option<String>,
 }
 
 impl ShellRuntime {
@@ -82,6 +86,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
+            skill_permission_profile_id: req.skill_permission_profile_id.clone(),
         }]
     }
 
@@ -124,19 +129,24 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        if req.sandbox_permissions.requires_escalated_permissions()
-            || matches!(
-                req.exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    ..
-                }
-            )
+        if req.sandbox_policy_override.is_none()
+            && (req.sandbox_permissions.requires_escalated_permissions()
+                || matches!(
+                    req.exec_approval_requirement,
+                    ExecApprovalRequirement::Skip {
+                        bypass_sandbox: true,
+                        ..
+                    }
+                ))
         {
             SandboxOverride::BypassSandboxFirstAttempt
         } else {
             SandboxOverride::NoOverride
         }
+    }
+
+    fn sandbox_policy_override<'a>(&self, req: &'a ShellRequest) -> Option<&'a SandboxPolicy> {
+        req.sandbox_policy_override.as_ref()
     }
 }
 

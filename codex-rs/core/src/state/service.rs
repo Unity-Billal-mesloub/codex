@@ -10,12 +10,16 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::skills::SkillPermissionRegistry;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_hooks::Hooks;
 use codex_otel::OtelManager;
+use std::collections::HashMap;
+use std::sync::Arc as StdArc;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
@@ -36,6 +40,8 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) skill_permission_registries:
+        StdRwLock<HashMap<String, StdArc<SkillPermissionRegistry>>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,

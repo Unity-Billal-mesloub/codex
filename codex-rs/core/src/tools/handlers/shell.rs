@@ -296,6 +296,11 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
+        let skill_permission_context = session.skill_permission_context_for_command(
+            turn.as_ref(),
+            &exec_params.command,
+            &exec_params.cwd,
+        );
         let exec_approval_requirement = session
             .services
             .exec_policy
@@ -305,6 +310,7 @@ impl ShellHandler {
                 sandbox_policy: &turn.sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
+                skill_permission_context: skill_permission_context.clone(),
             })
             .await;
 
@@ -317,6 +323,12 @@ impl ShellHandler {
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
+            sandbox_policy_override: skill_permission_context
+                .as_ref()
+                .map(|ctx| ctx.sandbox_policy_override.clone()),
+            skill_permission_profile_id: skill_permission_context
+                .as_ref()
+                .map(|ctx| ctx.profile_id.clone()),
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

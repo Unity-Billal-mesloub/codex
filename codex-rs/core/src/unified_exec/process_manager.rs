@@ -523,6 +523,11 @@ impl UnifiedExecProcessManager {
         ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let skill_permission_context = context.session.skill_permission_context_for_command(
+            context.turn.as_ref(),
+            &request.command,
+            &cwd,
+        );
         let exec_approval_requirement = context
             .session
             .services
@@ -533,6 +538,7 @@ impl UnifiedExecProcessManager {
                 sandbox_policy: &context.turn.sandbox_policy,
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
+                skill_permission_context: skill_permission_context.clone(),
             })
             .await;
         let req = UnifiedExecToolRequest {
@@ -544,6 +550,12 @@ impl UnifiedExecProcessManager {
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),
             exec_approval_requirement,
+            sandbox_policy_override: skill_permission_context
+                .as_ref()
+                .map(|ctx| ctx.sandbox_policy_override.clone()),
+            skill_permission_profile_id: skill_permission_context
+                .as_ref()
+                .map(|ctx| ctx.profile_id.clone()),
         };
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

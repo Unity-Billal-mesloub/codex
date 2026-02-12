@@ -30,6 +30,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -44,6 +45,8 @@ pub struct UnifiedExecRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub sandbox_policy_override: Option<SandboxPolicy>,
+    pub skill_permission_profile_id: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
@@ -52,6 +55,7 @@ pub struct UnifiedExecApprovalKey {
     pub cwd: PathBuf,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
+    pub skill_permission_profile_id: Option<String>,
 }
 
 pub struct UnifiedExecRuntime<'a> {
@@ -83,6 +87,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             cwd: req.cwd.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
+            skill_permission_profile_id: req.skill_permission_profile_id.clone(),
         }]
     }
 
@@ -128,19 +133,27 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        if req.sandbox_permissions.requires_escalated_permissions()
-            || matches!(
-                req.exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    ..
-                }
-            )
+        if req.sandbox_policy_override.is_none()
+            && (req.sandbox_permissions.requires_escalated_permissions()
+                || matches!(
+                    req.exec_approval_requirement,
+                    ExecApprovalRequirement::Skip {
+                        bypass_sandbox: true,
+                        ..
+                    }
+                ))
         {
             SandboxOverride::BypassSandboxFirstAttempt
         } else {
             SandboxOverride::NoOverride
         }
+    }
+
+    fn sandbox_policy_override<'a>(
+        &self,
+        req: &'a UnifiedExecRequest,
+    ) -> Option<&'a SandboxPolicy> {
+        req.sandbox_policy_override.as_ref()
     }
 }
 

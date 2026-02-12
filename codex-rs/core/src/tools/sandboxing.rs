@@ -205,6 +205,10 @@ pub(crate) trait Approvable<Req> {
         SandboxOverride::NoOverride
     }
 
+    fn sandbox_policy_override<'a>(&self, _req: &'a Req) -> Option<&'a SandboxPolicy> {
+        None
+    }
+
     fn should_bypass_approval(&self, policy: AskForApproval, already_approved: bool) -> bool {
         if already_approved {
             // We do not ask one more time

@@ -27,6 +27,7 @@ use tokio::task::spawn_blocking;
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::sandboxing::SandboxPermissions;
+use crate::skills::SkillPermissionContext;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use shlex::try_join as shlex_try_join;
 
@@ -89,6 +90,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) sandbox_policy: &'a SandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) skill_permission_context: Option<SkillPermissionContext>,
 }
 
 impl ExecPolicyManager {
@@ -120,7 +122,20 @@ impl ExecPolicyManager {
             sandbox_policy,
             sandbox_permissions,
             prefix_rule,
+            skill_permission_context,
         } = req;
+        if let Some(skill_permission_context) = skill_permission_context {
+            return if matches!(approval_policy, AskForApproval::Never) {
+                ExecApprovalRequirement::Forbidden {
+                    reason: PROMPT_CONFLICT_REASON.to_string(),
+                }
+            } else {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(skill_permission_context.reason),
+                    proposed_execpolicy_amendment: None,
+                }
+            };
+        }
         let exec_policy = self.current();
         let (commands, used_heredoc_fallback) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
@@ -805,6 +820,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -855,6 +871,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -882,6 +899,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -910,6 +928,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(requested_prefix.clone()),
+                skill_permission_context: None,
             })
             .await;
 
@@ -949,6 +968,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -978,6 +998,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1008,6 +1029,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1031,6 +1053,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1055,6 +1078,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1083,6 +1107,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1113,6 +1138,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+                skill_permission_context: None,
             })
             .await;
 
@@ -1150,6 +1176,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::DangerFullAccess,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    skill_permission_context: None,
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1224,6 +1251,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1254,6 +1282,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1281,6 +1310,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1319,6 +1349,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    skill_permission_context: None,
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1342,6 +1373,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1372,6 +1404,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1395,6 +1428,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                skill_permission_context: None,
             })
             .await;
 
@@ -1461,6 +1495,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    skill_permission_context: None,
                 })
                 .await,
             "{pwsh_approval_reason}"
@@ -1484,6 +1519,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    skill_permission_context: None,
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval
@@ -1503,6 +1539,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    skill_permission_context: None,
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval
