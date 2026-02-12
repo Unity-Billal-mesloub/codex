@@ -975,18 +975,10 @@ impl ModelClientSession {
     }
 }
 
-/// Parses per-turn metadata into an HTTP header value.
-///
-/// Invalid values are treated as absent so callers can compare and propagate
-/// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_id_header(turn_id_header: Option<&str>) -> Option<HeaderValue> {
     turn_id_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
 
-/// Parses per-turn metadata into an HTTP header value.
-///
-/// Invalid values are treated as absent so callers can compare and propagate
-/// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }

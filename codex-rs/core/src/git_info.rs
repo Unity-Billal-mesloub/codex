@@ -266,7 +266,6 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     let mut command = Command::new("git");
-    // Read-only metadata commands should not contend on index.lock with foreground git operations.
     command
         .arg("--no-optional-locks")
         .args(args)
