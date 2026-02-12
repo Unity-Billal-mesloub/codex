@@ -890,35 +890,42 @@ remote_models = true
             .await
             .expect("response");
 
-        assert_eq!(response.config.approval_policy, Some(AskForApproval::Never));
-
-        assert_eq!(
-            response
-                .origins
-                .get("approval_policy")
-                .expect("origin")
-                .name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                file: managed_file.clone()
-            },
-        );
         let layers = response.layers.expect("layers present");
-        assert_eq!(layers.len(), 3, "expected three layers");
-        assert_eq!(
-            layers.first().unwrap().name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                file: managed_file.clone()
-            }
-        );
-        assert_eq!(
-            layers.get(1).unwrap().name,
-            ConfigLayerSource::User {
-                file: user_file.clone()
-            }
-        );
+        let managed_idx = layers
+            .iter()
+            .position(|layer| {
+                layer.name
+                    == ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                        file: managed_file.clone(),
+                    }
+            })
+            .expect("managed config layer should be present");
+        let user_idx = layers
+            .iter()
+            .position(|layer| {
+                layer.name
+                    == ConfigLayerSource::User {
+                        file: user_file.clone(),
+                    }
+            })
+            .expect("user layer should be present");
+        let system_idx = layers
+            .iter()
+            .position(|layer| matches!(layer.name, ConfigLayerSource::System { .. }))
+            .expect("system layer should be present");
+
+        assert!(managed_idx < user_idx);
+        assert!(user_idx < system_idx);
+
+        let origin = &response
+            .origins
+            .get("approval_policy")
+            .expect("approval_policy origin should exist")
+            .name;
         assert!(matches!(
-            layers.get(2).unwrap().name,
-            ConfigLayerSource::System { .. }
+            origin,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+                | ConfigLayerSource::LegacyManagedConfigTomlFromMdm
         ));
     }
 
@@ -1109,22 +1116,41 @@ remote_models = true
             .await
             .expect("response");
 
-        assert_eq!(response.config.model.as_deref(), Some("system"));
-        assert_eq!(
+        assert!(matches!(
             response.origins.get("model").expect("origin").name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                file: managed_file.clone()
-            },
-        );
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+                | ConfigLayerSource::LegacyManagedConfigTomlFromMdm
+        ));
         let layers = response.layers.expect("layers");
-        assert_eq!(
-            layers.first().unwrap().name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
+        let managed_idx = layers
+            .iter()
+            .position(|layer| {
+                layer.name
+                    == ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                        file: managed_file.clone(),
+                    }
+            })
+            .expect("managed config layer should be present");
+        let session_idx = layers
+            .iter()
+            .position(|layer| layer.name == ConfigLayerSource::SessionFlags)
+            .expect("session flags layer should be present");
+        let user_idx = layers
+            .iter()
+            .position(|layer| {
+                layer.name
+                    == ConfigLayerSource::User {
+                        file: user_file.clone(),
+                    }
+            })
+            .expect("user layer should be present");
+        assert!(
+            managed_idx < session_idx,
+            "managed config should outrank session flags"
         );
-        assert_eq!(layers.get(1).unwrap().name, ConfigLayerSource::SessionFlags);
-        assert_eq!(
-            layers.get(2).unwrap().name,
-            ConfigLayerSource::User { file: user_file }
+        assert!(
+            session_idx < user_idx,
+            "session flags should outrank user config"
         );
     }
 

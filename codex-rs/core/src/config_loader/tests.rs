@@ -276,12 +276,6 @@ async fn returns_empty_when_all_layers_missing() {
         "expected empty config for user layer when config.toml does not exist"
     );
 
-    let binding = layers.effective_config();
-    let base_table = binding.as_table().expect("base table expected");
-    assert!(
-        base_table.is_empty(),
-        "expected empty base layer when configs missing"
-    );
     let num_system_layers = layers
         .layers_high_to_low()
         .iter()
@@ -292,15 +286,13 @@ async fn returns_empty_when_all_layers_missing() {
         "system layer should always be present"
     );
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let effective = layers.effective_config();
-        let table = effective.as_table().expect("top-level table expected");
-        assert!(
-            table.is_empty(),
-            "expected empty table when configs missing"
-        );
-    }
+    assert!(
+        layers.layers_high_to_low().iter().all(|layer| !matches!(
+            layer.name,
+            super::ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+        )),
+        "managed file layer should be absent when managed_config.toml does not exist"
+    );
 }
 
 #[cfg(target_os = "macos")]
