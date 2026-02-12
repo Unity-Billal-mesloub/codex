@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +11,9 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::Serializer;
 
-pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookOutcome> + Send + Sync>;
+pub type HookError = Box<dyn Error + Send + Sync + 'static>;
+pub type HookResult = Result<HookOutcome, HookError>;
+pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookResult> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Hook {
@@ -20,13 +23,13 @@ pub struct Hook {
 impl Default for Hook {
     fn default() -> Self {
         Self {
-            func: Arc::new(|_| Box::pin(async { HookOutcome::Continue })),
+            func: Arc::new(|_| Box::pin(async { Ok(HookOutcome::Continue) })),
         }
     }
 }
 
 impl Hook {
-    pub async fn execute(&self, payload: &HookPayload) -> HookOutcome {
+    pub async fn execute(&self, payload: &HookPayload) -> HookResult {
         (self.func)(payload).await
     }
 }

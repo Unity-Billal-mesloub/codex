@@ -1,6 +1,9 @@
+use std::fmt;
+
 use tokio::process::Command;
 
 use crate::types::Hook;
+use crate::types::HookError;
 use crate::types::HookEvent;
 use crate::types::HookOutcome;
 use crate::types::HookPayload;
@@ -14,6 +17,30 @@ pub struct HooksConfig {
 pub struct Hooks {
     after_agent: Vec<Hook>,
     after_tool_use: Vec<Hook>,
+}
+
+#[derive(Debug)]
+pub struct HookDispatchError {
+    hook_index: usize,
+    source: HookError,
+}
+
+impl HookDispatchError {
+    pub fn hook_index(&self) -> usize {
+        self.hook_index
+    }
+}
+
+impl fmt::Display for HookDispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "hook at index {} failed", self.hook_index)
+    }
+}
+
+impl std::error::Error for HookDispatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
 }
 
 impl Default for Hooks {
@@ -45,14 +72,22 @@ impl Hooks {
         }
     }
 
-    pub async fn dispatch(&self, hook_payload: HookPayload) {
-        // TODO(gt): support interrupting program execution by returning a result here.
-        for hook in self.hooks_for_event(&hook_payload.hook_event) {
-            let outcome = hook.execute(&hook_payload).await;
+    pub async fn dispatch(&self, hook_payload: HookPayload) -> Result<(), HookDispatchError> {
+        for (hook_index, hook) in self
+            .hooks_for_event(&hook_payload.hook_event)
+            .iter()
+            .enumerate()
+        {
+            let outcome = hook
+                .execute(&hook_payload)
+                .await
+                .map_err(|source| HookDispatchError { hook_index, source })?;
             if matches!(outcome, HookOutcome::Stop) {
                 break;
             }
         }
+
+        Ok(())
     }
 }
 
@@ -120,7 +155,20 @@ mod tests {
                 let calls = Arc::clone(&calls);
                 Box::pin(async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    outcome
+                    Ok(outcome)
+                })
+            }),
+        }
+    }
+
+    fn failing_hook(calls: &Arc<AtomicUsize>) -> Hook {
+        let calls = Arc::clone(calls);
+        Hook {
+            func: Arc::new(move |_| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(std::io::Error::other("hook failed").into())
                 })
             }),
         }
@@ -216,14 +264,20 @@ mod tests {
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("1")).await;
+        hooks
+            .dispatch(hook_payload("1"))
+            .await
+            .expect("dispatch hooks");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn default_hook_is_noop_and_continues() {
         let payload = hook_payload("d");
-        let outcome = Hook::default().execute(&payload).await;
+        let outcome = Hook::default()
+            .execute(&payload)
+            .await
+            .expect("default hook should not fail");
         assert_eq!(outcome, HookOutcome::Continue);
     }
 
@@ -238,7 +292,10 @@ mod tests {
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("2")).await;
+        hooks
+            .dispatch(hook_payload("2"))
+            .await
+            .expect("dispatch hooks");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -253,7 +310,10 @@ mod tests {
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("3")).await;
+        hooks
+            .dispatch(hook_payload("3"))
+            .await
+            .expect("dispatch hooks");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -265,7 +325,29 @@ mod tests {
             ..Hooks::default()
         };
 
-        hooks.dispatch(after_tool_use_payload("p")).await;
+        hooks
+            .dispatch(after_tool_use_payload("p"))
+            .await
+            .expect("dispatch hooks");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_returns_error_and_stops_when_hook_fails() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_agent: vec![
+                failing_hook(&calls),
+                counting_hook(&calls, HookOutcome::Continue),
+            ],
+            ..Hooks::default()
+        };
+
+        let err = hooks
+            .dispatch(hook_payload("err"))
+            .await
+            .expect_err("dispatch should fail");
+        assert_eq!(err.hook_index(), 0);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -290,7 +372,7 @@ mod tests {
                     ])
                     .expect("build command");
                     command.status().await.expect("run hook command");
-                    HookOutcome::Continue
+                    Ok(HookOutcome::Continue)
                 })
             }),
         };
@@ -302,7 +384,7 @@ mod tests {
             after_agent: vec![hook],
             ..Hooks::default()
         };
-        hooks.dispatch(payload).await;
+        hooks.dispatch(payload).await.expect("dispatch hooks");
 
         let contents = timeout(Duration::from_secs(2), async {
             loop {
@@ -348,7 +430,7 @@ mod tests {
                     ])
                     .expect("build command");
                     command.status().await.expect("run hook command");
-                    HookOutcome::Continue
+                    Ok(HookOutcome::Continue)
                 })
             }),
         };
@@ -360,7 +442,7 @@ mod tests {
             after_agent: vec![hook],
             ..Hooks::default()
         };
-        hooks.dispatch(payload).await;
+        hooks.dispatch(payload).await.expect("dispatch hooks");
 
         let contents = timeout(Duration::from_secs(2), async {
             loop {

@@ -53,7 +53,7 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
             Box::pin(async move {
                 let mut command = match command_from_argv(&argv) {
                     Some(command) => command,
-                    None => return HookOutcome::Continue,
+                    None => return Ok(HookOutcome::Continue),
                 };
                 if let Ok(notify_payload) = legacy_notify_json(&payload.hook_event, &payload.cwd) {
                     command.arg(notify_payload);
@@ -65,8 +65,10 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
 
-                let _ = command.spawn();
-                HookOutcome::Continue
+                command
+                    .spawn()
+                    .map(|_| HookOutcome::Continue)
+                    .map_err(Into::into)
             })
         }),
     }

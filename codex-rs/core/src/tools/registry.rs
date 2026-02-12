@@ -339,7 +339,7 @@ async fn dispatch_after_tool_use_hook(dispatch: AfterToolUseHookDispatch<'_>) {
     let session = invocation.session.as_ref();
     let turn = invocation.turn.as_ref();
     let tool_input = HookToolInput::from(&invocation.payload);
-    session
+    if let Err(err) = session
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
@@ -363,5 +363,13 @@ async fn dispatch_after_tool_use_hook(dispatch: AfterToolUseHookDispatch<'_>) {
                 },
             },
         })
-        .await;
+        .await
+    {
+        warn!(
+            call_id = %invocation.call_id,
+            tool_name = %invocation.tool_name,
+            error = %err,
+            "after_tool_use hook failed"
+        );
+    }
 }

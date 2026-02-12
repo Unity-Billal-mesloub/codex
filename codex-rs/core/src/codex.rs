@@ -4164,7 +4164,8 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    sess.hooks()
+                    if let Err(err) = sess
+                        .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
                             cwd: turn_context.cwd.clone(),
@@ -4178,7 +4179,14 @@ pub(crate) async fn run_turn(
                                 },
                             },
                         })
-                        .await;
+                        .await
+                    {
+                        warn!(
+                            turn_id = %turn_context.sub_id,
+                            error = %err,
+                            "after_agent hook failed"
+                        );
+                    }
                     break;
                 }
                 continue;
