@@ -30,6 +30,7 @@ use tokio::net::lookup_host;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -329,18 +330,38 @@ impl NetworkProxyState {
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
         let mut guard = self.state.write().await;
+        let host = entry.host.clone();
+        let reason = entry.reason.clone();
+        let decision = entry.decision.clone();
+        let source = entry.source.clone();
+        let protocol = entry.protocol.clone();
+        let port = entry.port;
         guard.blocked.push_back(entry);
         guard.blocked_total = guard.blocked_total.saturating_add(1);
+        let total = guard.blocked_total;
         while guard.blocked.len() > MAX_BLOCKED_EVENTS {
             guard.blocked.pop_front();
         }
+        debug!(
+            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, buffered={})",
+            total,
+            host,
+            reason,
+            decision,
+            source,
+            protocol,
+            port,
+            guard.blocked.len()
+        );
         Ok(())
     }
 
     pub async fn blocked_cursor(&self) -> Result<u64> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(guard.blocked_total)
+        let cursor = guard.blocked_total;
+        debug!("blocked telemetry cursor read: {cursor}");
+        Ok(cursor)
     }
 
     pub async fn blocked_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
@@ -350,7 +371,23 @@ impl NetworkProxyState {
         let oldest_retained_cursor = guard.blocked_total.saturating_sub(blocked_len_u64);
         let effective_cursor = cursor.max(oldest_retained_cursor);
         let skip = effective_cursor.saturating_sub(oldest_retained_cursor) as usize;
-        Ok(guard.blocked.iter().skip(skip).cloned().collect())
+        let result: Vec<BlockedRequest> = guard.blocked.iter().skip(skip).cloned().collect();
+        debug!(
+            "blocked_since(cursor={cursor}) -> {} entries (oldest_retained_cursor={}, blocked_total={}, buffered={})",
+            result.len(),
+            oldest_retained_cursor,
+            guard.blocked_total,
+            guard.blocked.len()
+        );
+        Ok(result)
+    }
+
+    /// Returns a snapshot of buffered blocked-request entries without consuming
+    /// them.
+    pub async fn blocked_snapshot(&self) -> Result<Vec<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.blocked.iter().cloned().collect())
     }
 
     /// Drain and return the buffered blocked-request entries in FIFO order.
@@ -718,6 +755,44 @@ mod tests {
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].host, "google.com");
         assert_eq!(blocked[0].decision.as_deref(), Some("ask"));
+    }
+
+    #[tokio::test]
+    async fn blocked_snapshot_does_not_consume_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+
+        let snapshot = state
+            .blocked_snapshot()
+            .await
+            .expect("snapshot should succeed");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].host, "google.com");
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should still include entry");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].host, "google.com");
     }
 
     #[tokio::test]

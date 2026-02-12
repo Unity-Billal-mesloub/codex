@@ -7,6 +7,7 @@ use codex_async_utils::OrCancelExt;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::error;
 use tracing::warn;
 use uuid::Uuid;
@@ -27,7 +28,6 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -147,7 +147,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy = turn_context.sandbox_policy.clone();
     let mut retried_after_network_approval = false;
     let mut retry_network_context: Option<NetworkApprovalContext> = None;
 
@@ -292,11 +292,29 @@ pub(crate) async fn execute_user_shell_command(
                         ..
                     }) = &err
                 {
+                    if let Some(payload) = network_policy_decision.as_ref() {
+                        debug!(
+                            "user shell received structured network decision on sandbox deny (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
+                            payload.decision,
+                            payload.source,
+                            payload.host,
+                            payload.protocol,
+                            payload.port
+                        );
+                    } else {
+                        debug!(
+                            "user shell sandbox deny did not include structured network decision"
+                        );
+                    }
                     let network_approval_context = network_policy_decision
                         .as_ref()
                         .and_then(network_approval_context_from_payload);
 
                     if let Some(network_approval_context) = network_approval_context {
+                        debug!(
+                            "user shell requesting network approval for host {}",
+                            network_approval_context.host
+                        );
                         let approval_decision = session
                             .request_command_approval(
                                 turn_context.as_ref(),
@@ -316,12 +334,22 @@ pub(crate) async fn execute_user_shell_command(
                             ReviewDecision::Approved
                             | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                             | ReviewDecision::ApprovedForSession => {
+                                debug!(
+                                    "user shell network approval granted for host {}",
+                                    network_approval_context.host
+                                );
                                 retried_after_network_approval = true;
                                 retry_network_context = Some(network_approval_context);
                                 continue;
                             }
-                            ReviewDecision::Denied | ReviewDecision::Abort => {}
+                            ReviewDecision::Denied | ReviewDecision::Abort => {
+                                debug!("user shell network approval denied by user");
+                            }
                         }
+                    } else if network_policy_decision.is_some() {
+                        debug!(
+                            "user shell could not derive network approval context from structured decision payload"
+                        );
                     }
                 }
 
