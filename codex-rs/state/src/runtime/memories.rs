@@ -178,6 +178,7 @@ LEFT JOIN jobs
     ///
     /// Query behavior:
     /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
+    /// - joins `threads` to include thread `cwd`
     /// - orders by `source_updated_at DESC, thread_id DESC`
     /// - applies `LIMIT n`
     pub async fn list_stage1_outputs_for_global(
@@ -190,8 +191,17 @@ LEFT JOIN jobs
 
         let rows = sqlx::query(
             r#"
-SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.generated_at
+     , COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
 WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
@@ -403,6 +413,7 @@ WHERE kind = ? AND job_key = ?
     /// - sets `status='done'` and `last_success_watermark = input_watermark`
     /// - upserts `stage1_outputs` for the thread, replacing existing output only
     ///   when `source_updated_at` is newer or equal
+    /// - persists optional `rollout_slug` for rollout summary artifact naming
     /// - enqueues/advances the global phase-2 job watermark using
     ///   `source_updated_at`
     pub async fn mark_stage1_job_succeeded(
@@ -412,6 +423,7 @@ WHERE kind = ? AND job_key = ?
         source_updated_at: i64,
         raw_memory: &str,
         rollout_summary: &str,
+        rollout_slug: Option<&str>,
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
@@ -450,12 +462,14 @@ INSERT INTO stage1_outputs (
     source_updated_at,
     raw_memory,
     rollout_summary,
+    rollout_slug,
     generated_at
-) VALUES (?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     source_updated_at = excluded.source_updated_at,
     raw_memory = excluded.raw_memory,
     rollout_summary = excluded.rollout_summary,
+    rollout_slug = excluded.rollout_slug,
     generated_at = excluded.generated_at
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,
@@ -464,6 +478,7 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .bind(source_updated_at)
         .bind(raw_memory)
         .bind(rollout_summary)
+        .bind(rollout_slug)
         .bind(now)
         .execute(&mut *tx)
         .await?;
